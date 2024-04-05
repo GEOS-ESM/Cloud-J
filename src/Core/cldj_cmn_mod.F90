@@ -17,19 +17,21 @@
       logical  LCLIRAD
       logical  LGGLLNL
       
-      ! Dimensions of readin spec - NWBIN can zero out strat-wavels
-      integer  NWBIN
-      integer  NSBIN
-
 !------------------------------------------------------------------------------
 ! Basic vertical grid
 !------------------------------------------------------------------------------
 
       ! Can be changed as needed. Must be exact atmospheric dimensions.
 
-      integer :: L_    !  # of CTM layers
+#ifdef MODEL_GEOSCHEM
+      integer :: L_    !  # of CTM layers, set at run-time
       integer :: L1_   !  L_+1 = # of CTM layer edges (radii)
       integer :: L2_   !  L_+2 = total # of layer edges counting top (TAU=0)
+#else
+      integer, parameter :: L_  = 57   !  # of CTM layers, set at build-time
+      integer, parameter :: L1_ = L_+1 !  L_+1 = # of CTM layer edges (radii)
+      integer, parameter :: L2_ = L_+2 !  L_+2 = total # of layer edges counting top (TAU=0)
+#endif
 
       !  # layers that have clouds (LWEPAR < L_)
       integer, parameter :: LWEPAR = 34        
@@ -153,8 +155,12 @@
       real*8, parameter:: HeatFac_ = 86400.d0*9.80616d0/1.00464d5
 
 !-----------------------------------------------------------------------
-! Key parameters read in at initialization and not locked in at compile
+! Parameters read from primary Cloud-J config file CJ77_inp.dat
 !-----------------------------------------------------------------------
+
+      ! Dimensions of readin spec - NWBIN can zero out strat-wavels
+      integer  NWBIN
+      integer  NSBIN
 
       ! ZZHT: scale height (cm) used above top of CTM ZHL(L_+1)
       !real*8, parameter   :: ZZHT = 5.d5
@@ -437,6 +443,10 @@
       real*8, dimension(64)       :: Y_GREF
 
       real*8, dimension(19)       :: P_GREF
+
+!------------------------------------------------------------------------------
+! Variables in file 'FJX_j2j.dat' (RD_JS_JX)
+!------------------------------------------------------------------------------
 
       ! multiplication factor for fast-JX calculated J
       real*8  JFACTA(JVN_)
