@@ -1,12 +1,14 @@
 !<<<<<<<<<<<<<<<<<<fastJX initialization codes:  need to be called only once
-! Solar/Cloud/Fast-J v 7.7, minor edits, added !SJ! lines
+! Solar/Cloud/Fast-J
+! v 7.7, minor edits, added !SJ! lines
+! v 8.0 - added QH2O for UV abs
 
 ! INTERFACE:
 
       MODULE CLDJ_INIT_MOD
 
       USE CLDJ_CMN_MOD
-      USE CLDJ_FJX_SUB_MOD, ONLY : EXITC
+      USE CLDJ_ERROR_MOD
 !SJ!  USE CLDJ_FJX_MOD
 
       IMPLICIT NONE
@@ -28,187 +30,229 @@
       CONTAINS
 
 !-----------------------------------------------------------------------
-      subroutine INIT_CLDJ (AMIROOT,DATADIR,NLEVELS,TITLEJXX,NJXU,NJXX)
+      subroutine INIT_CLDJ (AMIROOT,DATADIR,NLEVELS,NLEVELS_WITH_CLOUD, &
+           TITLEJXX,NJXU,ATAU_in,ATAU0_in, NWBIN_in, CLDFLAG_in,        &
+           CLDCOR_in,LNRG_in,ATM0_in,use_H2O_UV_abs,NJXX,RC )
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)           :: thisloc
       logical, intent(in)          :: AMIROOT
       character(LEN=*), intent(in) :: DATADIR
       integer, intent(in)          :: NLEVELS
+      integer, intent(in)          :: NLEVELS_WITH_CLOUD
       integer, intent(in)          :: NJXU
+      real*8,  intent(in)          :: ATAU_in
+      real*8,  intent(in)          :: ATAU0_in
+      integer, intent(in)          :: NWBIN_in
+      integer, intent(in)          :: CLDFLAG_in
+      real*8,  intent(in)          :: CLDCOR_in
+      integer, intent(in)          :: LNRG_in
+      integer, intent(in)          :: ATM0_in
+      logical, intent(in)          :: use_H2O_UV_abs
       integer, intent(out)         :: NJXX
+      integer, intent(out)         :: RC
       character*6, intent(out), dimension(NJXU) :: TITLEJXX
 
       character*120  TIT_SPEC
       integer  JXUNIT,I, J, K, KR, RANSEED, NUN
 
-      if (AMIROOT) write(6,*) ' Solar/Cloud-J  ver-7.7 initialization'
+      thisloc = ' -> at INIT_CLDJ in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
+      if (AMIROOT) write(6,*) ' Solar/Cloud-J  ver-8.0 initialization parameters'
 
-#if defined ( MODEL_GEOSCHEM )
+      ! Use channel 8 to read fastJ data files:
+      JXUNIT = 8
+
+#ifndef MODEL_STANDALONE
       ! Set cldj_cmn_mod variables based on input numbers of levels
       L_    = NLEVELS
       L1_   = L_ + 1
       L2_   = L_ + 2
+      LWEPAR= NLEVELS_WITH_CLOUD
 #endif
 
-      JVL_  = L_
-      mxlay = L1_
+      ! Set global variables from inputs
+      ATAU     =  ATAU_in
+      ATAU0    =  ATAU0_in
+      CLDCOR   =  CLDCOR_in
+      NWBIN    =  NWBIN_in
+      LNRG     =  LNRG_in
+      ATM0     =  ATM0_in
+      CLDFLAG  =  CLDFLAG_in
+      USEH2OUV =  use_H2O_UV_abs
 
-      ! Use channel 8 to read fastJX data files:
-      JXUNIT  = 8
+! a v7.7 fix was done within sub ICA_NR, this is now moved up front and must be correct in setup
+      if (LNRG.ne.6) then
+        CLDCOR = 0.d0         ! v7.7 safety fix for LNRG=0 or 3
+      endif
 
-      NUN = JXUNIT
-      open (NUN,FILE=TRIM(DATADIR)//'CJ77_inp.dat',status='old', &
-            form='formatted')
-      read (NUN,'(a120)',err=4) TIT_SPEC
-         if (AMIROOT) write(6,'(a)') trim(TIT_SPEC)
-      read (NUN,'(e10.3)',err=4) RAD
-      read (NUN,'(e10.3)',err=4) ZZHT
-      read (NUN,'(e10.3)',err=4) ATAU
-      read (NUN,'(e10.3)',err=4) ATAU0
-      read (NUN,'(e10.3)',err=4) CLDCOR
-      read (NUN,'(i10  )',err=4) NWBIN
-      read (NUN,'(i10  )',err=4) NSBIN
-      read (NUN,'(i10  )',err=4) LNRG
-      read (NUN,'(i10  )',err=4) NRANDO
-      read (NUN,'(i10  )',err=4) ATM0
-      read (NUN,'(i10  )',err=4) CLDFLAG
-         if (AMIROOT) write(6,'(a,3i5)') ' finish params LNRG ATM0 CLDFLAG',LNRG,ATM0,CLDFLAG
-      close (NUN)
+      if (AMIROOT) then
+         write(6,'(a,1p,2e12.5)') ' params RAD ZZHT',RAD, ZZHT
+         write(6,'(a,3f8.4)') ' params CLDCOR',CLDCOR
+         write(6,'(a,4i5)') ' params NWBIN LNRG CLDFLAG',NWBIN,LNRG,CLDFLAG
+         write(6,'(a,f8.4,a,f8.4,a,i2)') 'params ATAU0=',ATAU0,'  ATAU=',ATAU,'   option(ATM0)= ', ATM0
+         write(6,'(a,i3,a,i3,a,i3)') 'params W_=',W_,'  S_=',S_,'  W_r=',W_r
+         write(6,'(a,l1)') 'params use_H2O_UV_abs=',use_H2O_UV_abs
+      endif
 
-      ! Uncomment below to set cloud scheme to clear sky for testing
-      !CLDFLAG = 1
-      NSJSUB(:) = 0
+      if (W_ .ne. 18) then
+        call CLOUDJ_ERROR('Invalid no. wavelengths', thisloc, rc)
+        return
+      endif
+
+! Cloud-J default:  can have added near IR bins (if S_ > W_) but no sub bins
+      NSJSUB(1:S_)= NGC(1:S_)
       SJSUB(:,:) = 0.d0   ! default set up for wavelengths when no sub-bins
       SJSUB(:,1) = 1.d0
-
-! Cloud-J default with added near IR bins (if S_ > W)) but no sub bins
-      LRRTMG = .false.
-      LCLIRAD =.false.
-      LGGLLNL =.false.
-      NSJSUB(1:S_)= NGC(1:S_)
-
-! while CLIRAD could be configured to run in Cloud-J, it cannot without
-! custom fixes.
-!sJ!      if (W_rrtmg .gt. 0) then
-!sJ!! use RRTMG gas absorption/NGC is set at cmn_fjx_
-!sJ!         NSJSUB(1:SX_)= NGC(1:SX_)
-!sJ!         W_r=   W_rrtmg
-!sJ!         LRRTMG  =.true.
-!sJ!         LCLIRAD =.false.
-!sJ!         LGGLLNL =.false.
-!sJ!      elseif (W_clirad .gt. 0) then
-!sJ!! use CLIRAD gas absorption
-!sJ!         NSJSUB(1:W_)=1
-!sJ!         NSJSUB(W_+1:SX_)=10
-!sJ!         W_r = W_clirad
-!sJ!         LRRTMG  =.false.
-!sJ!         LCLIRAD =.true.
-!sJ!         LGGLLNL =.false.
-!sJ!      elseif (W_LLNL .gt. 0) then
-!sJ!! use GG-LLNL gas absorption
-!sJ!         NSJSUB(1:W_)=1
-!sJ!         NSJSUB(W_+1:SX_)= 7
-!sJ!         W_r = W_LLNL
-!sJ!         LRRTMG  =.false.
-!sJ!         LCLIRAD =.false.
-!sJ!         LGGLLNL =.true.
-!sJ!      endif
-      if (AMIROOT) write(6,'(a,3l2)')'LRRTMG/LCLIRAD/LGGLLNL=', LRRTMG, LCLIRAD, LGGLLNL
-
-!  inital RRTMG setup is done in subrotine CHEM_IN of p-input.f
-!  note that (if(LRRTMG) call RRTMG_SW_INI(cpdair)) is in CHEM_in of p-input.f
-!  lock indexing of RRTMg superbins (1:W_+W_r) onto std bins fluxes (1:S_)
-      if (AMIROOT) write(6,'(a,i3,a,i3,a,i3,a,i3)') 'W_rrtmg= ',W_rrtmg,'  S_=',S_, &
-            '  W_r=',W_r,'  W_+ W_r= ',W_+W_r
-      if (AMIROOT) write(6,'(a,f8.4,a,f8.4,a,i2)') 'ATAU0=',ATAU0,'  ATAU=',ATAU, &
-            '   option(ATM0)= ', ATM0
-
-! with Cloud-J v7.6, NO wavelength truncation for trop only, internal fixes
-! remain
-      if (W_ .ne. 18) then
-        call EXITC(' INIT_JX: invalid no. wavelengths')
-      endif
-
-! set up angles of diffuse radiance at ocean surface
-      ANGLES(1) = sngl(EMU(1))
-      ANGLES(2) = sngl(EMU(2))
-      ANGLES(3) = sngl(EMU(3))
-      ANGLES(4) = sngl(EMU(4))
-      ANGLES(5) = 0.e0 ! assgin U0 in photol_mod.f90
+      do I = W_,  S_
+         SJSUB(I,1)   = 1.d0
+         SJSUB(I,2:16)= 0.d0
+      enddo
+      if (AMIROOT) write(6,'(a/(30i3))')'NJSUB=', NSJSUB
 
 ! Read in Fast/Solar-J X-sections (spectral data)
-      call RD_XXX(AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_spec.dat')
-
-      if (.not.(LRRTMG .or. LCLIRAD .or. LGGLLNL)) then
-         do I = W_,  S_
-            SJSUB(I,1)   = 1.d0
-            SJSUB(I,2:16)= 0.d0
-         enddo
+      call RD_XXX(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_spec.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_XXX', thisloc, rc)
+         return
       endif
+
+! KR = 1:sum(NSJSUB), LDOKR = 0 = FLux=0 & skip this bin (sub-bin): primarily for Solar-J
       KDOKR(:)=0
       KR = 0
       do K = 1,S_
          do J = 1,NSJSUB(K)
             KR = KR+1
             KDOKR(KR) = K
-            if (AMIROOT) write(6,'(A,2I5)')'KR/KDOKR(KR)',KR, KDOKR(KR)
+            if (FL(K) .gt. 0.d0) then
+               LDOKR(KR) = 1
+            else
+               LDOKR(KR) = 0
+            endif
+            if (AMIROOT) write(6,'(A,3I5)')'KR/KDOKR(KR)/LDOKR(KR)',KR, KDOKR(KR), LDOKR(KR)
          enddo
       enddo
-      if (KR .ne. W_+W_r) CALL EXITC('>>>error w/ RRTM sub bins: KDOKR')
-      do KR = 1, W_+W_r
-         K = KDOKR(KR)
-         if (FL(K) .gt. 0.d0) then ! FL is read in call RD_XXX
-            LDOKR(KR) = 1
-         else
-            LDOKR(KR) = 0
-         endif
-      enddo
+      if (KR .ne. W_+W_r) then
+         CALL CLOUDJ_ERROR('>>>error w/ RRTM sub bins: KDOKR', thisloc, rc)
+         return
+      endif
+      
+      ! Read in cloud scattering data
+      call RD_CLD(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_scat-cld.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_CLD', thisloc, rc)
+         return
+      endif
 
-! Read in cloud scattering data
-      call RD_CLD(AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_scat-cld.dat')
+      ! Read in UCI strat sulf aerosols scattering data
+      call RD_SSA(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_scat-ssa.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_SSA', thisloc, rc)
+         return
+      endif
 
-! Read in strat sulf aerosols scattering data
-      call RD_SSA(AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_scat-ssa.dat')
+      ! Read in aerosols scattering data
+      call RD_MIE(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_scat-aer.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_MIE', thisloc, rc)
+         return
+      endif
 
-! Read in aerosols scattering data
-      call RD_MIE(AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_scat-aer.dat')
+      ! Read in UMich aerosol scattering data
+#ifdef MODEL_GEOSCHEM
+      ! Not used in GEOS-Chem. Set to zero for safety.
+      WMM = 0.0d0
+      UMAER = 0.0d0
+#else
+      call RD_UM (AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_scat-UMa.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_UM', thisloc, rc)
+         return
+      endif
+#endif
 
-! Read in UMich aerosol scattering data
-      call RD_UM (AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_scat-UMa.dat')
+      ! Read in GEOMIP aerosol scattering data
+#ifdef MODEL_GEOSCHEM
+      ! Not used in GEOS-Chem. Set to zero for safety.
+      NGG = 0
+      RGG = 0.0d0
+      DGG = 0.0d0
+      QGG = 0.0d0
+      SGG = 0.0d0
+      PGG = 0.0d0
+#else
+      call RD_GEO (AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_scat-geo.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_GEO', thisloc, rc)
+         return
+      endif
+#endif
 
-! Read in GEOMIP aerosol scattering data
-      call RD_GEO (AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_scat-geo.dat')
+#ifdef MODEL_STANDALONE
+      ! Read in T & O3 climatology used to fill e.g. upper layers or if O3 not calc.
+      call RD_PROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'atmos_std.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_PROF', thisloc, rc)
+         return
+      endif
 
-! Read in T & O3 climatology used to fill e.g. upper layers or if O3 not calc.
-      call RD_PROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'atmos_std.dat')
+      ! Read in H2O and CH4 profiles for Solar-J
+      call RD_TRPROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'atmos_h2och4.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_TRPROF', thisloc, rc)
+         return
+      endif
+#else
+      ! These variables are only used in ACLIM_FJX which is only called in
+      ! Cloud-J standalone. Zero them out for safety if using external model.
+      T_REF = 0.0d0
+      O_REF = 0.0d0
+      H2O_REF = 0.0d0
+      CH4_REF = 0.0d0
+#endif
 
-! Read in H2O and CH4 profiles for Solar-J
-      call RD_TRPROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'atmos_h2och4.dat')
-
-! Read in zonal mean Strat-Sulf-Aerosol monthly data
-      call RD_SSAPROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'atmos_geomip.dat')
+      ! Read in zonal mean Strat-Sulf-Aerosol monthly data
+#ifdef MODEL_GEOSCHEM
+      ! Not used in GEOS-Chem. Set to zero for safety.
+      R_GREF = 0.0d0
+      X_GREF = 0.0d0
+      A_GREF = 0.0d0
+      Y_GREF = 0.0d0
+      P_GREF = 0.0d0
+#else
+      call RD_SSAPROF(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'atmos_geomip.dat',rc)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_SSAPROF', thisloc, rc)
+         return
+      endif
+#endif
 
       NJXX = NJX
       do J = 1,NJXX
         TITLEJXX(J) = TITLEJX(J)
       enddo
 
-! Read in photolysis rates used in chemistry code and mapping onto FJX J's
-!---CTM call:  read in J-values names and link to fast-JX names
-      call RD_JS_JX(AMIROOT,JXUNIT,TRIM(DATADIR)//'FJX_j2j.dat', TITLEJXX,NJXX)
-
-!---for full ASAD:
-!     call RD_JS(JXUNIT,TRIM(DATADIR)//'ratj.d', TITLEJXX,NJXX,TSPECI,JPSPEC  &
-!                ,MJVAL,TJVAL,MJX)
+      ! Read in photolysis rates used in chemistry code and mapping onto FJX J's
+      !---CTM call:  read in J-values names and link to fast-JX names
+      call RD_JS_JX(AMIROOT,JXUNIT,TRIM(DATADIR)//'/'//'FJX_j2j.dat', TITLEJXX,NJXX,RC)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RD_JS_JX', thisloc, rc)
+         return
+      endif
 
 !---setup the random number sequence RAN4
       RANSEED = 66
-      call RANSET (NRAN_,RAN4,RANSEED)
+      call RANSET (NRAN_,RAN4,RANSEED,RC)
+      if ( rc /= CLDJ_SUCCESS ) then
+         call CLOUDJ_ERROR('Error in RANSET', thisloc, rc)
+         return
+      endif
 
       goto 1
     4 continue
-        call EXITC(' CLDJ_INIT: error in read')
+      call CLOUDJ_ERROR('Error in read', thisloc, rc)
+      return
+
     1 continue
 
       if (AMIROOT) write(6,*) ' end of Solar/Cloud-J initialization'
@@ -217,10 +261,11 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_XXX(AMIROOT,NUN,NAMFIL)
+      subroutine RD_XXX(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !  Read in wavelength bins, solar fluxes, Rayleigh, T-dep X-sections.
 !
+!>>>>NEW v-8.0  added xH2O cross sections for near UV absorption        
 !>>>>NEW v-7.6+ added Solar-J bins for some to expand to S_
 !     NOTE:  W_=18, use NWBIN 8,12,18 to zero flux for wavelengths only in strat
 !>>>>NEW v-7.3  expanded input, full names & notes
@@ -238,22 +283,28 @@
 !     WL       Centres of wavelength bins - 'effective wavelength'
 !     FL       Solar flux incident on top of atmosphere (cm-2.s-1)
 !     QRAYL    Rayleigh parameters (effective cross-section) (cm2)
+!     QH2O     H2O cross-sections,  UV-blue absorption, 290-350 nm        
 !     QO2      O2 cross-sections
 !     QO3      O3 cross-sections
 !     Q1D      O3 => O(1D) quantum yield
 !     TQQ      Temperature for supplied cross sections
 !     QQQ      Supplied cross sections in each wavelength bin (cm2)
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
+
       integer  I, J, JJ, K, IW, NQRD, LQ, NWWW, NSSS
       character*120  TIT_SPEC, TIT_J1N
       character*16 TIT_J1L
       character*6  TIT_J1S,TIT_J2S
       real*8  FWSUM
+
+      thisloc = ' -> at RD_XXX in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       TQQ(:,:) = 0.d0
 
@@ -261,27 +312,26 @@
 !   note that X_ = max # Xsects read in
 !           NJX = # fast-JX J-values derived from this (.le. X_)
       if (W_ .ne. 18) then
-       call EXITC(' no. wavelengths wrong: W_ .ne. 18')
+        call CLOUDJ_ERROR(' no. wavelengths wrong: W_ .ne. 18', thisloc, rc)
+        return 
       endif
 
       open (NUN,FILE=trim(NAMFIL),status='old',form='formatted')
 
       read (NUN,'(a120)',err=4) TIT_SPEC
       read (NUN,*,err=4)
-      read (NUN,'(i5,5x,i5)',err=4) NWWW, NSSS
+      read (NUN,'(i5,5x,i5)',err=4) NWWW, NSSS ! dimensions for data set
 
       if (AMIROOT) write(6,'(a)') adjustl(trim(TIT_SPEC))
       if (AMIROOT) write(6,'(i5,A20,i5,A20)')  NWWW, ' photo-chem wl bins ', &
             NSSS, ' solar heating bins '
 
-      if (NWWW.gt.WX_ .or. NSSS.gt.SX_) then
-       call EXITC(' WX_ or SX_ not large enough')
+      !---these are the dimensions for readin of the solar data sets, it does NOT mean that bin 19:27 need
+      ! be calculated
+      if (NWWW.ne.WX_ .or. NSSS.ne.SX_) then
+         call CLOUDJ_ERROR(' WX_ or SX_ -- incompatible data sets w.r.t parameters', thisloc, rc)
+         return
       endif
-
-      NW1 = 1
-      NW2 = NWWW
-      NS1 = 1
-      NS2 = NSSS
 
 !----w-params:  1=w-eff  2=w-bins, 3=solar(photons), 4=solar(W/m2), 5=Y-PAR,
 ! 6=Rayleigh, 7=SJ sub-bins
@@ -320,22 +370,30 @@
                                         ' notes: ', adjustl(trim(TIT_J1N))
       read (NUN,'(5x,6e10.3)',err=4)    (QRAYL(IW),IW=1,NSSS)
 
-!7 SJ-sub-bins
+!SJ! SJ-sub-bins for RRMTG, CLIRAD, GGLLNL
       read (NUN,'(a6,1x,a16,1x,a120)',err=4) TIT_J1S,TIT_J1L,TIT_J1N
          if (AMIROOT) write(6,'(1x,a6,1x,a16,a8,a)') trim(TIT_J1S),trim(TIT_J1L), &
                                            ' notes: ',adjustl(trim(TIT_J1N))
-      do I = 1,NSSS
+      do I= NWWW, NSSS  ! fraction of solar radiation for each sub-bin
+         read  (NUN,'(5x,5f10.5)',err=4) (SJSUB(I,IW),IW=1,15)
+         if (AMIROOT) write(6,'(5x,5f10.6)') (SJSUB(I,IW),IW=1,15)
+      enddo
+!SJ! SJSUB needs to be reset to 1's, since in Cloud-J, only the first sub-bin is used
+     do I = 1,NSSS
         SJSUB(I,1)    = 1.0d0
         SJSUB(I,2:15) = 0.0d0
-      enddo
-      if ((NSSS .eq. 27) .or. (NSSS .eq. 21)) then
-!SJ! this is different in SJ, allows for SJSBU(:,1:16)  ? RRTM
-         do I= NWWW, NSSS  ! fraction of solar radiation for each sub-bin
-            read  (NUN,'(5x,5f10.5)',err=4) (SJSUB(I,IW),IW=1,15)
-               if (AMIROOT) write(6,'(5x,5f10.6)') (SJSUB(I,IW),IW=1,15)
-         enddo
+     enddo
+!---Read H2O X-sects  *** v8.0
+      read (NUN,'(a6,1x,a16,1x,a120)',err=4) TIT_J1S,TIT_J1L,TIT_J1N
+      read (NUN,'(5x,6e10.3/5x,6e10.3/5x,6e10.3)',err=4)    &
+          (QH2O(IW),IW=1,NWWW)
+      if (AMIROOT) write(6,'(1x,a6,1x,a16,a8,a120)') TIT_J1S,TIT_J1L,' notes:',TIT_J1N   !print
+      ! If H2O UV absorption turned off then zero out QH2O and write note:
+      if ( .not. USEH2OUV ) then
+         QH2O = 0.0d0
+         if (AMIROOT) write(6,'(a60)') 'WARNING: H2O UV absorption is turned off in Cloud-J'
       endif
-
+     
 !---Read O2 X-sects, O3 X-sects, O3=>O(1D) quant yields (each at 3 temps)
 !---NB the O3 and q-O3-O1D are at different temperatures and cannot be combined
       read (NUN,'(a6,1x,a16,1x,a120)',err=4) TIT_J1S,TIT_J1L,TIT_J1N
@@ -402,7 +460,10 @@
     2 continue
        JJ = JJ+1
        LQ = 1
-         if (JJ .gt. X_) call EXITC(' RD_XXX: X_ not large enough')
+       if (JJ .gt. X_) then
+          call CLOUDJ_ERROR('X_ not large enough', thisloc, rc)
+          return
+       endif
        TITLEJX(JJ) = TIT_J1S
        TITLEJL(JJ) = TIT_J1L
       read (NUN,'(a1,f3.0,1x,6e10.3/5x,6e10.3/5x,6e10.3)',err=4)    &
@@ -436,7 +497,9 @@
       endif
       goto 3
     4 continue
-        call EXITC(' RD_XXX: error in read')
+      call CLOUDJ_ERROR('Error in read', thisloc, rc)
+      return
+
     1 continue
       NJX = JJ
 
@@ -475,15 +538,17 @@
 !---need to check that TQQ (= T(K) or p(hPa)) is monotonically increasing:
       do J = 1,NJX
          if ((LQQ(J) .eq. 3) .and. (TQQ(2,J) .ge. TQQ(3,J))) then
-            call EXITC ('TQQ out of order')
+            call CLOUDJ_ERROR('TQQ out of order', thisloc, rc)
+            return
          endif
          if ((LQQ(J) .eq. 2) .and. (TQQ(1,J) .ge. TQQ(2,J))) then
-            call EXITC ('TQQ out of order')
+            call CLOUDJ_ERROR('TQQ out of order', thisloc, rc)
+            return
          endif
       enddo
 
-!---if FL(K) =0, then scattering skipped, method for dropping to 8 or 12
-!trop-only bins
+!---if FL(K) =0, then R.T calc skipped, method for dropping to 8 or 12 trop-only bins
+!           Note that the 'X' cross sections are also skipped
       if (NWBIN .eq. 12) then
          do IW = 1,4
             FL(IW) = 0.d0
@@ -508,7 +573,7 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_CLD(AMIROOT,NUN,NAMFIL)
+      subroutine RD_CLD(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !-------aerosols/cloud scattering data set for fast-JX ver 7.5
 !-----------------------------------------------------------------------
@@ -522,15 +587,19 @@
 !     SCC      Single scattering albedo
 !     DCC      density (g/cm^3)
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 
       integer  I,J,K,L, JCC
       character*120 TITLE0
       real*8     GCCJ, XNDR,XNDI
+
+      thisloc = ' -> at RD_CLD in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       open (NUN,FILE=NAMFIL,status='old',form='formatted',err=4)
 
@@ -580,8 +649,9 @@
         goto 2
 
     4 continue
-        call EXITC(' RD_CLD: error in read')
-
+        call CLOUDJ_ERROR('Error in read', thisloc, rc)
+        return
+        
     2 continue
         close(NUN)
 
@@ -591,7 +661,7 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_SSA(AMIROOT,NUN,NAMFIL)
+      subroutine RD_SSA(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !-------aerosols/cloud scattering data set for fast-JX ver 7.4
 !-----------------------------------------------------------------------
@@ -607,15 +677,19 @@
 !     SSS      Single scattering albedo
 !     DSS      density (g/cm^3)
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 
       integer  I, J, JSS, K, JCC, NSX_
       character*120 TITLE0
       real*8     WJSS,XNDR,XNDI
+
+      thisloc = ' -> at RD_SSA in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       open (NUN,FILE=NAMFIL,status='old',form='formatted',err=4)
       read (NUN,'(a120)',err=4) TITLE0
@@ -625,7 +699,6 @@
       read (NUN,*)
       if (AMIROOT) write(6,'(i6,a)') NSS, ' types of strat sulf aerosols'
       do K = 1,NSS
-!SJ! *** the SSA file for LCLIRAD in SJ has different format  '(a12, 3f8,4,...
          read (NUN,'(a10, 3f8.4, 2f8.1)')    &
               TITLSS(K),RSS(K),GSS(K),DSS(K),TSS(K),WSS(K)
          if (AMIROOT) write(6,'(i4,1x,a12,2f10.4,2f8.1)') K,TITLSS(K),RSS(K),DSS(K),&
@@ -649,7 +722,8 @@
       goto 2
 
     4 continue
-        call EXITC(' RD_SSA: error in read')
+      call CLOUDJ_ERROR('Error in read', thisloc, rc)
+      return
 
     2 continue
         close(NUN)
@@ -658,7 +732,7 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_MIE(AMIROOT,NUN,NAMFIL)
+      subroutine RD_MIE(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !-------aerosols scattering data set for fast-JX ver 7.3+
 !-----------------------------------------------------------------------
@@ -672,11 +746,12 @@
 !     SAA      Single scattering albedo
 !     DAA      density (g/cm^3)
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 
       integer  I, J, K , JAA
       character*120 TITLE0
@@ -684,6 +759,9 @@
 !      character*12 TITLAA(A_) 
       Character*12 TITLAAJ
       real*8   RAAJ, DAAJ
+
+      thisloc = ' -> at RD_MIE in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       if (AMIROOT) write(6,'(i5,a)') NUN,trim(NAMFIL)
 
@@ -722,8 +800,8 @@
       goto 2
 
     4 continue
-
-      call EXITC(' RD_MIE: error in read')
+      call CLOUDJ_ERROR('Error in read', thisloc, rc)
+      return
 
     2 continue
 
@@ -733,22 +811,26 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_UM(AMIROOT,NUN,NAMFIL)
+      subroutine RD_UM(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !-------UMich aerosol optical data for fast-JX (ver 6.1+)
 !-----------------------------------------------------------------------
 !     NAMFIL   Name of scattering data file (e.g., FJX_scat.dat)
 !     NUN      Channel number for reading data file
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 
       integer  I, J, K, L
       character*78 TITLE0
       character*20 TITLUM(33)   ! TITLUM: Title for U Michigan aerosol data set
+
+      thisloc = ' -> at RD_UM in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       open (NUN,FILE=NAMFIL,status='old',form='formatted')
 
@@ -787,21 +869,24 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_PROF(AMIROOT,NJ2,NAMFIL)
+      subroutine RD_PROF(AMIROOT,NJ2,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !  Routine to input T and O3 reference profiles 'atmos_std.dat'
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) ::  NJ2
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 !
       integer IA, I, M, L, LAT, MON, NTLATS, NTMONS, N216
       real*8  OFAC, OFAK
 
       character*78 TITLE0
 !
+      thisloc = ' -> at RD_PROF in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
       open (NJ2,file=NAMFIL,status='old',form='formatted')
       read (NJ2,'(A)') TITLE0
       read (NJ2,'(2I5)') NTLATS,NTMONS
@@ -846,20 +931,23 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_TRPROF(AMIROOT,NJ2,NAMFIL)
+      subroutine RD_TRPROF(AMIROOT,NJ2,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !  Routine to input H2O and CH4 reference profiles 'atmos_h2och4.dat'
 !-----------------------------------------------------------------------
-      implicit none
 
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) ::  NJ2
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 !
       integer IA, I, M, L, LAT, MON, NTLATS, NTMONS, N216
 
       character*78 TITLE0
 !
+      thisloc = ' -> at RD_TRPROF in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
       open (NJ2,file=NAMFIL,status='old',form='formatted')
       read (NJ2,'(A)') TITLE0
       read (NJ2,'(2I5)') NTLATS,NTMONS
@@ -896,7 +984,7 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_JS_JX(AMIROOT,NUNIT,NAMFIL,TITLEJX,NJX)
+      subroutine RD_JS_JX(AMIROOT,NUNIT,NAMFIL,TITLEJX,NJX,RC)
 !-----------------------------------------------------------------------
 !  Read 'FJX_j2j.dat' that defines mapping of fast-JX J's (TITLEJX(1:NJX))
 !    onto the CTM reactions:  react# JJ, named T_REACT, uses fast-JX's JVMAP
@@ -911,18 +999,22 @@
 !     NRATJ     number of Photolysis reactions in CTM chemistry, derived here
 !                   NRATJ must be .le. JVN_
 !-----------------------------------------------------------------------
-      implicit none
 !
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in)                    ::  NUNIT, NJX
       character(*), intent(in)               ::  NAMFIL
       character*6, intent(in),dimension(NJX) :: TITLEJX
+      integer, intent(out)                   :: RC
+
       integer   J,JJ,K
       character*120 CLINE
       character*50 T_REACT
       character*6  T_FJX
       real*8 F_FJX
 
+      thisloc = ' -> at RD_JS_JX in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 ! Read the FJX_j2j.dat file to map model specific J's onto fast-JX J's
 ! The chemistry code title describes fully the reaction (a50)
 ! Blank (unfilled) chemistry J's are unmapped
@@ -939,7 +1031,11 @@
          if (AMIROOT) write(6,'(a)') CLINE
       do J = 1,JVN_
        read (NUNIT,'(i4,1x,a50,4x,f5.3,2x,a6)') JJ,T_REACT,F_FJX,T_FJX
-       if (JJ .gt. JVN_) exit
+       if (JJ .eq. 9999 ) exit
+       if (JJ .gt. JVN_) then
+          call CLOUDJ_ERROR('JVN_ must be >= number of entries in FJX_j2j.dat!', thisloc, rc)
+          return
+       endif
         JLABEL(JJ) = T_REACT
         JFACTA(JJ) = F_FJX
         JVMAP(JJ) = T_FJX
@@ -991,9 +1087,9 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_GEO(AMIROOT,NUN,NAMFIL)
+      subroutine RD_GEO(AMIROOT,NUN,NAMFIL,RC)
 !-----------------------------------------------------------------------
-!-------GEOMIP SSA scattering data set for fast-JX ver 7.5 ONLY RRTMG 27 bins
+!-------GEOMIP SSA scattering data set for fast-JX ver 7.5 ONLY FOR Cloud-J & RRTMG 27 bins
 !-----------------------------------------------------------------------
 !     NAMFIL   Name of scattering data file (e.g., FJX_scat-geo.dat)
 !     NUN      Channel number for reading data file
@@ -1004,14 +1100,19 @@
 !     SGG      Single scattering albedo
 !     PGG      Phase function: first 8 terms of expansion
 !-----------------------------------------------------------------------
-      implicit none
+
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) :: NUN
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 
       integer  I, J, K
       character*120 TITLE0
       real*8     WGGJ,XNDR,XNDI,G1,G2,G3
+
+      thisloc = ' -> at RD_GEO in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 
       open (NUN,FILE=NAMFIL,status='old',form='formatted',err=4)
 
@@ -1043,7 +1144,8 @@
       goto 2
 
     4 continue
-      call EXITC(' RD_GEO: error in read')
+      call CLOUDJ_ERROR('Error in read', thisloc, rc)
+      return
 
     2 continue
       close(NUN)
@@ -1052,20 +1154,24 @@
 
 
 !-----------------------------------------------------------------------
-      subroutine RD_SSAPROF(AMIROOT,NJ2,NAMFIL)
+      subroutine RD_SSAPROF(AMIROOT,NJ2,NAMFIL,RC)
 !-----------------------------------------------------------------------
 !  Routine to input SSA-GEO reference profiles for 'atmos_geomip.dat'
 !      R_GEO = effective radius (microns)
 !      X_GEO = mass fraction (1e-9 kg-H2SO4/kg-air)
 !-----------------------------------------------------------------------
-      implicit none
+
+      character(len=255)  :: thisloc
       logical, intent(in) :: AMIROOT
       integer, intent(in) ::  NJ2
       character(*), intent(in) ::  NAMFIL
+      integer, intent(out)     :: RC
 !
       integer J,L,M
       character*78 TITLE0
 !
+      thisloc = ' -> at RD_SSAPROF in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
       open (NJ2,file=NAMFIL,status='old',form='formatted')
       read (NJ2,'(a)') TITLE0
          if (AMIROOT) write(6,'(1x,a)') TITLE0
@@ -1118,11 +1224,12 @@
 
 
 !-----------------------------------------------------------------------
-      SUBROUTINE RANSET (ND,RAN4L,ISTART)
+      SUBROUTINE RANSET (ND,RAN4L,ISTART,RC)
 !-----------------------------------------------------------------------
 !  generates a sequence of real*4 pseudo-random numbers RAN4L(1:ND)
 !     program RAN3 from Press, based on Knuth
-      implicit none
+
+      character(len=255) ::  thisloc
       integer, parameter ::  MBIG=1000000000
       integer, parameter ::  MSEED=161803398
       integer, parameter ::  MZ=0
@@ -1130,7 +1237,12 @@
       integer,intent(in)    :: ND
       real*4, intent(out)   :: RAN4L(ND)
       integer,intent(inout) :: ISTART
+      integer,intent(out)   :: RC
+
       integer :: MA(55),MJ,MK,I,II,J,K,INEXT,INEXTP
+
+      thisloc = ' -> at RANSET in module cldj_init_mod.F90'
+      rc = CLDJ_SUCCESS
 !---initialization and/or fix of ISEED < 0
         MJ = MSEED - abs(ISTART)
         MJ = mod(MJ,MBIG)

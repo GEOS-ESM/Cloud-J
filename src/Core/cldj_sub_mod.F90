@@ -1,12 +1,13 @@
 !------------------------------------------------------------------------------
-!   'cldj_sub_mod.f90' for Cloud-J v7.7 (02/2020) - last change = fixes for MAXRAN
+!   'cldj_sub_mod.f90'
 !------------------------------------------------------------------------------
 ! Determines how to treat clouds, fractional overlap, etc.
 
       MODULE CLDJ_SUB_MOD
 
       USE CLDJ_CMN_MOD
-      USE CLDJ_FJX_SUB_MOD,  ONLY: PHOTO_JX, EXITC
+      USE CLDJ_ERROR_MOD
+      USE CLDJ_FJX_SUB_MOD,  ONLY: PHOTO_JX
 
       IMPLICIT NONE
 
@@ -29,7 +30,7 @@
       SUBROUTINE CLOUD_JX (U0,SZA,RFL,SOLF,LPRTJ,PPP,ZZZ,TTT,HHH,DDD,  &
              RRR,OOO,CCC, LWP,IWP,REFFL,REFFI, CLDF,CLDCOR,CLDIW,      &
              AERSP,NDXAER,L1U,ANU,NJXU, VALJXX,SKPERD,SWMSQ,OD18,      &
-             IRAN,NICA, JCOUNT,LDARK,WTQCA)
+             IRAN,NICA, JCOUNT,LDARK,WTQCA,RC)
 
 !---Current recommendation for best average J's is
 !     1) cloud decorellation w/ max-overlap blocks:  LNRG = 6 and CLDCOR = 0.33
@@ -90,7 +91,7 @@
 !     = 2 = ice cloud only
 !     = 3 = liquid+ice cloud mix
 !-----------------------------------------------------------------------
-      implicit none
+
 !---calling sequence variables
       integer, intent(in)                    :: L1U
       integer, intent(in)                    :: ANU
@@ -99,7 +100,7 @@
       real*8,  intent(in)                    :: U0     !v7.7
       real*8,  intent(in)                    :: SZA    !v7.7
       real*8,  intent(in)                    :: SOLF   !v7.7
-      real*8,  intent(inout)                 :: CLDCOR !v7.7
+      real*8,  intent(in)                    :: CLDCOR !v7.7=>v8.0
       real*8,intent(in), dimension(5,W_+W_r) :: RFL
       logical, intent(in)                    :: LPRTJ
       real*8,  intent(in), dimension(L1U+1)  :: PPP
@@ -127,9 +128,11 @@
       integer, intent(out)                     :: NICA
       integer, intent(out)                     :: JCOUNT
       logical, intent(out)                     :: LDARK
+      integer, intent(out)                     :: RC
 !-----------------------------------------------------------------------
+      character(len=255)          :: thisloc
       logical  LPRTJ0
-      integer  I,II,J,K,L,M,N, LTOP, NRG,IRANX
+      integer  I,II,J,K,L,M,N, LTOP, NRG,IRANX, NRANDO
       real*8   CLDFR, XRAN, FSCALE, QCAOD, WTRAN
       real*8,  dimension(L1U)     :: LWPX,IWPX,REFFLX,REFFIX
       real*8,  dimension(LWEPAR)  :: CLTL,CLTI, CLT,CLDX
@@ -148,28 +151,32 @@
       real*8,  dimension(L1U)       :: OD18Q
 
 !-----------------------------------------------------------------------
-      LPRTJ0 = LPRTJ
-      JCOUNT = 0
-      NICA = 0
-      do L = LWEPAR+1, L1U
-         LWPX(L) = 0.d0
-         IWPX(L) = 0.d0
-         REFFLX(L) = 0.d0
-         REFFIX(L) = 0.d0
-      enddo
-      VALJXX(:,:) = 0.d0    ! zero J's Heating R's in case LDARK is returned
-      SKPERD(:,:) = 0.d0
-      SWMSQ(:)    = 0.d0
-      VALJXXX(:,:) = 0.d0   ! zero the PHOTOJ equivalents for wtd averaging
-      SKPERDD(:,:) = 0.d0
-      SWMSQQ(:)    = 0.d0
-      OD18(:)      = 0.d0
-      OD18Q(:)     = 0.d0
+
+      ! initialize location and outputs for safety
+      thisloc = ' -> at CLOUD_JX in module cldj_sub_mod.F90'
+      rc = CLDJ_SUCCESS
+      LPRTJ0  = LPRTJ
+      JCOUNT  = 0
+      NICA    = 0
+      LWPX    = 0.d0
+      IWPX    = 0.d0
+      REFFLX  = 0.d0
+      REFFIX  = 0.d0
+      VALJXX  = 0.d0   ! zero J's Heating R's in case LDARK is returned
+      SKPERD  = 0.d0
+      SWMSQ   = 0.d0
+      VALJXXX = 0.d0   ! zero the PHOTOJ equivalents for wtd averaging
+      SKPERDD = 0.d0
+      SWMSQQ  = 0.d0
+      OD18    = 0.d0
+      OD18Q   = 0.d0
 
 !---CLOUD_JX:   different cloud schemes
 !-----------------------------------------------------------------------
       if (CLDFLAG.lt.1 .or. CLDFLAG.gt.8)then
-         call EXITC ('>>>stop, incorrect cloud index')
+         call CLOUDJ_ERROR('Incorrect cloud index: must be between 1 and 8'// &
+              ' except 4', thisloc, rc)
+         return
       endif
 
 !--------------------CLDFLAG =  1, 2, 3---------------------------------
@@ -209,13 +216,13 @@
 
 !----all above have only a single, simple call for fast_JX------------
          if(LPRTJ0) then
-            write(6,'(2a)') ' cloud_J v7.7 Internal print: clouds = ',&
+            write(6,'(2a)') ' cloud_J Internal print: clouds = ',&
                          TITCLD(CLDFLAG)
          endif
 !-----------------------------------------------------------------------
          call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH,       &
                   DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,       &
-                  NDXAER, L1U,ANU,NJXU, VALJXX,SKPERD,SWMSQ,OD18, LDARK)
+                  NDXAER, L1U,ANU,NJXU, VALJXX,SKPERD,SWMSQ,OD18, LDARK, RC)
          if (.not.LDARK) then
             JCOUNT = JCOUNT + 1
          endif
@@ -265,19 +272,22 @@
             CLDCOR,NCLDF,GFNR,GCMX,GNR,GBOT,GTOP,GLVL,NRG,NICA,  WCOL,OCOL)
 
          if(LPRTJ0) then
-            write(6,*) ' cloud-J v7.7  internal print:  #ICAs = ',NICA
+            write(6,*) ' cloud-J internal print:  #ICAs = ',NICA
          endif
 
 !-----------------------------------------------------------------------
 ! 4 = average direct beam over all ICAs  DISCONTINUED
          if (CLDFLAG .eq. 4) then
-            call EXITC(' CLD FLAG = 4 not allowed')
+            call CLOUDJ_ERROR('CLD FLAG = 4 not supported', thisloc, rc)
+            return
          endif
 
 !-----------------------------------------------------------------------
 ! 5 = random pick of NRANDO(#) ICAs (selected based on fractional area)
          if (CLDFLAG .eq. 5) then
 
+            ! # of random selections of ICAs to get average
+            NRANDO = 50
             if(LPRTJ0) then
                write(6,*) ' Average over random selection of ICAs:',NRANDO
             endif
@@ -286,6 +296,7 @@
             do I = 2,NICA
                OCDFS(I) = OCDFS(I-1) + WCOL(I)
             enddo
+            !Random select NRANDO ICA's from all(Independent Column Atmos.)
             do N=1,NRANDO
                IRANX = mod (IRAN+N-1, NRAN_) + 1
                XRAN = RAN4(IRANX)
@@ -320,7 +331,7 @@
 !-----------------------------------------------------------------------
                call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH,     &
                      DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,        &
-                     NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK)
+                     NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK,RC)
                if (.not.LDARK) then
                   JCOUNT = JCOUNT + 1
                endif
@@ -382,7 +393,7 @@
 !-----------------------------------------------------------------------
                   call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH, &
                    DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,     &
-                   NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK)
+                   NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK, RC)
                   if (.not.LDARK) then
                      JCOUNT = JCOUNT + 1
                   endif
@@ -424,14 +435,14 @@
             do N = 1, NQD_
                if (WTQCA(N) .gt. 0.d0) then
                   if (NQ2(N) .ge. NQ1(N)) then
-                     IWPX(:) = 0.d0
-                     LWPX(:) = 0.d0
+                     IWPX = 0.d0
+                     LWPX = 0.d0
                      QCAOD = 0.d0
                      do II = NQ1(N),NQ2(N)
                         I = ISORT(II)
 
                         call ICA_III( LPRTJ0, CLT,  LTOP, CBIN_, I,    NCLDF, GFNR, &
-                                      GNR,    GBOT, GTOP, NRG,   NICA, TTCOL )
+                                      GNR,    GBOT, GTOP, NRG,   NICA, TTCOL  )
 
                         if (LPRTJ0) then
                            write(6,'(a,3i5,2f8.4,f9.3)') &
@@ -463,9 +474,10 @@
                      endif
 
 !-----------------------------------------------------------------------
-               call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH,     &
-                    DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,         &
-                    NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK)
+                     call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH,     &
+                          DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,         &
+                          NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK,RC)
+               
                      if (.not.LDARK) then
                         JCOUNT = JCOUNT + 1
                      endif
@@ -519,7 +531,8 @@
 !-----------------------------------------------------------------------
                call PHOTO_JX (U0,SZA,RFL,SOLF, LPRTJ0, PPP,ZZZ,TTT,HHH,     &
                     DDD,RRR,OOO,CCC, LWPX,IWPX,REFFLX,REFFIX,AERSP,         &
-                    NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK)
+                    NDXAER, L1U,ANU,NJXU, VALJXXX,SKPERDD,SWMSQQ,OD18Q, LDARK, RC)
+               
                if (.not.LDARK) then
                   JCOUNT = JCOUNT + 1
                endif
@@ -579,7 +592,6 @@
 !   GFNR(G=1:NRG,1:GNR(G)) = cloud fraction quantum no (value = 0 to NCBIN)
 !          Stores the specific cloud fractions counted in GNR.
 !-----------------------------------------------------------------------
-      implicit none
 
 !---Cloud Cover parameters (in cldj_cmn_mod.f90)
 !      integer, parameter ::  NQD_  = 4
@@ -600,7 +612,7 @@
       integer,intent(in) :: LTOP, CBIN_, ICA_
       integer,intent(in),dimension(LTOP) :: CLDIW
       real*8, intent(in),dimension(LTOP) :: CLDF, ZZZ
-      real*8, intent(inout)                 :: CLDCOR     !v7.7
+      real*8, intent(in)                 :: CLDCOR
       real*8, intent(inout),dimension(LTOP) :: CLTAU,IWPX,LWPX
 
       integer, intent(out) ::  NRG, NICA
@@ -609,6 +621,7 @@
       integer, intent(out), dimension(9,CBIN_+1) :: GFNR
       real*8,  intent(out), dimension(CBIN_) :: CFBIN
 
+      character(len=255)        :: thisloc
       real*8   FBIN, FSCALE, CLF_MIN, CLF_MAX, FSCALE2
       integer                   ::  NRGX, NICAX
       integer, dimension(9)  :: GMIN,GMAX
@@ -616,6 +629,19 @@
       integer  I,K,L,LL,N,NC, L1,L2,L3,  LCLTOP,LCIRRUS
       logical  L1GRP,L2GRP,L3GRP, L6GRP
 !-----------------------------------------------------------------------
+
+      ! initialize location and outputs for safety
+      thisloc = ' -> at ICA_NR in module cldj_sub_mod.F90'
+      NRG   = 0
+      NICA  = 0
+      NCLDF = 0
+      GBOT  = 0
+      GTOP  = 0
+      GLVL  = 0
+      GNR   = 0
+      GCMX  = 0
+      GFNR  = 0
+      CFBIN = 0.d0
 
 !---quantize cloud fractions into bins to avoid excessive calculations for
 !---  nearly identical maximally overlapping cloud fractions.
@@ -680,7 +706,7 @@
 !---search from bottom to top, finding 1st level in group with cloud fraction
 !    .ge. threshold, and then first level above that at which the cld fraction
 !    is .lt. threshold. NRG = number of such groups.
-        CLDCOR = 0.d0         ! v7.7
+!        CLDCOR = 0.d0         ! v7.7, commented out in v8.0
         L = 1
         NRG = 0
         do while (L.lt.LTOP)  ! v7.7
@@ -721,7 +747,7 @@
 !---GRP=2 (if at all) is L=9 to last LWCloud
 !---GRP=3 (if at all) is L=last-LWCld+1 to LTOP
 !-----------------------------------------------------------------------------
-        CLDCOR = 0.d0    ! v7.7
+!        CLDCOR = 0.d0    ! v7.7, commented out in v8.0
         L1 = 1
         L2 = 9
 !----- L3-1 = uppermost liquid water cloud,  L3 = first of only ice-clouds
@@ -862,8 +888,8 @@
 !---finished selection of max-overlap groups
 
 !---simplify groups if no clouds with NCLDF > NG_BRK
-      GBOT(:) = 0
-      GTOP(:) = 0
+      GBOT = 0
+      GTOP = 0
       if (NRG .eq. 0) then
         NRG = 1
         GBOT(1) = 1
@@ -881,7 +907,7 @@
       endif
 !---for each max-overlap group calculate number of unique cloud fractions
       do N = 1,NRG
-        NSAME(:) = 0
+        NSAME = 0
         GCMX(N) = 0
         do L = GBOT(N),GTOP(N)
           if (NCLDF(L) .gt. 0) then
@@ -940,7 +966,7 @@
 !---See JL Neu, MJ Prather, JE Penner (2007), Global atmospheric chemistry:
 !      Integrating over fractional cloud cover,J. Geophys. Res., 112, D11306,
 !       doi:10.1029/2006JD008007
-      implicit none
+
       logical, intent(in) :: LPRTJ0
       integer, intent(in) :: LTOP, CBINU, ICAU, NRG, NICA
       integer, intent(in), dimension(LTOP)  :: NCLDF
@@ -951,14 +977,19 @@
       real*8,  intent(in)                   :: CLDCOR
       real*8,  intent(out),dimension(ICAU)  :: WCOL,OCOL
 
+      character(len=255) :: thisloc
       real*8  ODCOL,WTCOL,CF0(51),  FWT(10,51),FWTC(10,51),FWTCC(10,51)
-      real*8  FIG1,FIG2,GCORR,GCOWT,CORRFAC, FCMX(10) ,CLTOT(100)
+      real*8  FIG1,FIG2,GCORR,GCOWT,CORRFAC, FCMX(10)
       integer I, II, IG1,IG2, G, L,  IGNR(10),GCLDY(10),GRP1,GRP2
       logical L_CLR1,L_CLR2  ,LSKIP   ,LGR_CLR(10)
 !-----------------------------------------------------------------------
-        CLTOT(:) = 0.d0
 
-        CF0(1) = 0.d0
+      ! initialize location and outputs for safety
+      thisloc = ' -> at ICA_ALL in module cldj_sub_mod.F90'
+      WCOL = 0.d0
+      OCOL = 0.d0
+
+      CF0(1) = 0.d0
       do L = 1,CBINU
         CF0(L+1) = CFBIN(L)
       enddo
@@ -1073,7 +1104,7 @@
 !-----------------------------------------------------------------------
 !    see ICA_ALL, this subroutine picks out the ICA atmosphere #III
 !      and loads the REFF/WPs for a FAST_JX calculation.
-      implicit none
+
       logical, intent(in) :: LPRTJ0
       integer, intent(in) :: LTOP, CBINU, NRG, NICA, III
       integer, intent(in), dimension(LTOP)  :: NCLDF
@@ -1082,9 +1113,14 @@
       real*8,  intent(in), dimension(LTOP)  :: CLT
       real*8,  intent(out),dimension(LTOP)  :: TTCOL
 
+      character(len=255) :: thisloc
       integer II, IG, G, L
 !-----------------------------------------------------------------------
-         TTCOL(:) = 0.d0
+
+      ! initialize location and outputs for safety
+      thisloc = ' -> at ICA_III in module cldj_sub_mod.F90'
+      TTCOL = 0.d0
+
       II = max(1, min(NICA,III))
       do G = 1,NRG
           IG = mod(II-1, GNR(G)) + 1
@@ -1107,7 +1143,7 @@
 !---Create the Cumulative Prob Fn and select the mid-point ICA for each group
 !---The Quad atmospheres have weights WTQCA
 !-----------------------------------------------------------------------
-      implicit none
+
       integer, intent(in)        :: ICAU,NQDU,NICA
       real*8,  intent(in), dimension(ICAU)      :: WCOL,OCOL
 
@@ -1115,15 +1151,21 @@
       integer, intent(out), dimension(ICAU)     :: ISORT
       integer, intent(out), dimension(NQDU)     :: NQ1,NQ2,NDXQS
 
+      character(len=255)       :: thisloc
       real*8,  dimension(ICA_) :: OCDFS, OCOLS
       integer I, II, J, L, N, N1, N2
 
       real*8, parameter:: OD_QUAD(4) =[0.5d0, 4.0d0, 30.d0, 1.d9]
 !-----------------------------------------------------------------------
-      ISORT(:) = 0
-      WTQCA(:)  = 0.d0
-      NDXQS(:) = 0
-      OCOLS(:) = 0.d0
+
+      ! initialize location and outputs for safety
+      thisloc = ' -> at ICA_QUD in module cldj_sub_mod.F90'
+      ISORT = 0
+      NQ1   = 0
+      NQ2   = 0
+      NDXQS = 0
+      WTQCA = 0.d0
+      OCOLS = 0.d0
 
 !---sort all the Indep Column Atmos (ICAs) in order of increasing column OD
 !--- ISORT is the key, giving the ICA number from smallest to largest column OD
@@ -1167,12 +1209,6 @@
 
       END SUBROUTINE ICA_QUD
 
-
-!-----------------------------------------------------------------------
-!      SUBROUTINE ICA_DIRECT -- not used, finally removed in v7.7
-
-
-
 !-----------------------------------------------------------------------
       SUBROUTINE HEAPSORT_A (N,A,AX,IX,ND)
 !-----------------------------------------------------------------------
@@ -1182,14 +1218,22 @@
 !           A(IX(J)) ==> AX(J), s.t. IX(1) = orig location of smallest A
 !                           and IX(N) = original loc. of largest A
 !-----------------------------------------------------------------------
-      implicit none
+
       integer, intent(in)  :: N, ND
       real*8, dimension(ND),intent(in)  :: A
       real*8, dimension(ND),intent(out) :: AX
       integer,dimension(ND),intent(out) :: IX
+
+      character(len=255) :: thisloc
       integer :: I,J,L,IR,IA
       real*8 :: RA
 !-----------------------------------------------------------------------
+
+      ! initialize location and outputs for safety
+      thisloc = ' -> at HEAPSORT_A in module cldj_sub_mod.F90'
+      AX = 0.d0
+      IX = 0
+
       do I = 1,N
         IX(I) = I
         AX(I) = A(I)
